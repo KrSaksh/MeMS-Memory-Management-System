@@ -1,24 +1,68 @@
 /*
-All the main functions with respect to the MeMS are inplemented here
-read the function discription for more details
+All the main functions with respect to the MeMS are implemented here
+read the function description for more details
 
 NOTE: DO NOT CHANGE THE NAME OR SIGNATURE OF FUNCTIONS ALREADY PROVIDED
 you are only allowed to implement the functions 
 you can also make additional helper functions a you wish
 
-REFER DOCUMENTATION FOR MORE DETAILS ON FUNSTIONS AND THEIR FUNCTIONALITY
+REFER DOCUMENTATION FOR MORE DETAILS ON FUNCTIONS AND THEIR FUNCTIONALITY
 */
 // add other headers as required
 #include<stdio.h>
 #include<stdlib.h>
-
+#include<sys/mman.h>
 
 /*
-Use this macro where ever you need PAGE_SIZE.
+Use this macro wherever you need PAGE_SIZE.
 As PAGESIZE can differ system to system we should have flexibility to modify this 
 macro to make the output of all system same and conduct a fair evaluation. 
 */
-#define PAGE_SIZE 4096
+#define PAGE_SIZE 16384
+// 'getconf PAGESIZE' on Mac m1 terminal returns 16384
+// void *first = mmap(NULL, PAGE_SIZE*2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+// munmap(first, PAGE_SIZE*2);
+
+struct Address {
+	int virtual_address;
+	void *physical_address;
+	int size;
+	struct Sub_Chain_Node *associated_node;
+	struct Address *prev_address_node;
+	struct Address *next_address_node;
+}
+
+struct Sub_Chain_Node {
+	int type; // 1: Process; 0: Hole
+	int size;
+	int virtual_address;
+	void *physical_address;
+	struct Sub_Chain_Node *prev_sub_node;
+    struct Sub_Chain_Node *next_sub_node;
+};
+
+struct Main_Chain_Node {
+	int no_of_pages;
+	struct Sub_Chain_Node *head_sub_list;
+	struct Main_Chain_Node *prev_main_node;
+	struct Main_Chain_Node *next_main_node;
+};
+
+struct Address *head_address_node;
+struct Address *tail_address_node;
+
+struct Main_Chain_Node *head_main_node;
+struct Main_Chain_Node *tail_main_node;
+
+int cur_virtual_address;
+int *other_main_memory_ptr;
+int *other_main_memory_end;
+
+int *other_sub_memory_ptr;
+int *other_sub_memory_end;
+
+int *other_address_memory_ptr;
+int *other_address_memory_end;
 
 
 /*
@@ -30,7 +74,18 @@ Input Parameter: Nothing
 Returns: Nothing
 */
 void mems_init(){
-
+	head_address_node = NULL;
+	tail_address_node = NULL;
+	head_main_node = NULL;
+	tail_main_node = NULL;
+	head_sub_node = NULL;
+	other_main_memory_ptr = NULL;
+	other_main_memory_end = NULL;
+	other_sub_memory_ptr = NULL;
+	other_sub_memory_end = NULL;
+	other_address_memory_ptr = NULL;
+	other_address_memory_end = NULL;
+	cur_virtual_address = 0;
 }
 
 
@@ -58,6 +113,124 @@ Parameter: The size of the memory the user program wants
 Returns: MeMS Virtual address (that is created by MeMS)
 */ 
 void* mems_malloc(size_t size){
+	//Checking if Space is Left in Already Allocated Memory
+
+
+	//No Space is left in Already Allocated Memory
+	int pages_required = ((int)size) / PAGE_SIZE + 1;
+	int start_other_memory_flag = 0;
+
+	if (!other_main_memory_ptr) {
+		start_other_memory_flag = 1;
+	}
+
+
+	if (start_other_memory_flag || (int) (other_main_memory_end - other_main_memory_ptr) < (int)sizeof(struct Main_Chain_Node *)) {
+		void *new_other_main_memory_node = mmap(NULL, PAGE_SIZE * (((int)sizeof(struct Main_Chain_Node *)) / PAGE_SIZE + 1), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		other_main_memory_ptr = new_other_main_memory_node;
+		other_main_memory_end = other_main_memory_ptr + PAGE_SIZE * (((int)sizeof(struct Main_Chain_Node *)) / PAGE_SIZE + 1);
+	}
+
+	struct Main_Chain_Node *new_main_node = (struct Main_Chain_Node *) other_main_memory_ptr;
+	other_main_memory_ptr += (int)sizeof(struct Main_Chain_Node *);
+
+
+	if (start_other_memory_flag) {
+		head_main_node = new_main_node;
+		tail_main_node = new_main_node;
+		new_main_node->prev_main_node = NULL;
+		new_main_node->next_main_node = NULL;
+	}
+	else {
+		tail_main_node->next_main_node = new_main_node;
+		new_main_node->prev_main_node = tail_main_node;
+		tail_main_node = new_main_node;
+		new_main_node->next_main_node = NULL;
+	}
+
+	new_main_node->no_of_pages = pages_required;
+
+	void *main_node_memory = mmap(NULL, PAGE_SIZE * pages_required, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+
+	if (start_other_memory_flag || (int) (other_sub_memory_end - other_sub_memory_ptr) < (int)sizeof(struct Sub_Chain_Node *)) {
+		void *new_other_sub_memory_node = mmap(NULL, 2 * PAGE_SIZE * (((int)sizeof(struct Sub_Chain_Node *)) / PAGE_SIZE + 1), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		other_sub_memory_ptr = new_other_sub_memory_node;
+		other_sub_memory_end = other_sub_memory_ptr + 2 * PAGE_SIZE * (((int)sizeof(struct Sub_Chain_Node *)) / PAGE_SIZE + 1);
+	}
+
+	struct Sub_Chain_Node *process_node = (struct Sub_Chain_Node *) other_sub_memory_ptr;
+	other_sub_memory_ptr += (int)sizeof(struct Sub_Chain_Node *);
+
+	process_node->type = 1;
+	process_node->size = (int) size;
+	process_node->virtual_address = cur_virtual_address;
+	process_node->physical_address = main_node_memory;
+	tail_main_node->head_sub_list = process_node;
+	process_node->prev_sub_node = NULL;
+
+
+	if (start_other_memory_flag || (int) (other_address_memory_end - other_address_memory_ptr) < (int)sizeof(struct Address *)) {
+		void *new_other_address_memory_node = mmap(NULL, PAGE_SIZE * (((int)sizeof(struct Address *)) / PAGE_SIZE + 1) * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		other_address_memory_ptr = new_other_address_memory_node;
+		other_address_memory_end = other_address_memory_ptr + 2 * PAGE_SIZE * (((int)sizeof(struct Address *)) / PAGE_SIZE + 1);
+	}
+
+	struct Address *new_address_node = (struct Address *) other_address_memory_ptr;
+	other_address_memory_ptr += sizeof(struct Address *);
+
+	if (start_other_memory_flag) {
+		head_address_node = new_address_node;
+		tail_address_node = new_address_node;
+		new_address_node->prev_address_node = NULL;
+		new_address_node->next_address_node = NULL;
+	}
+	else {
+		tail_address_node->next_address_node = new_address_node;
+		new_address_node->prev_address_node = tail_address_node;
+		tail_address_node = new_address_node;
+		new_address_node->next_address_node = NULL;
+	}
+
+	tail_address_node->virtual_address = cur_virtual_address;
+	tail_address_node->physical_address = main_node_memory;
+	tail_address_node->size = process_node->size;
+	tail_address_node->associated_node = process_node;
+
+	cur_virtual_address += process_node->size;
+	main_node_memory += process_node->size;
+
+
+	struct Sub_Chain_Node *hole_node = (struct Sub_Chain_Node *) other_sub_memory_ptr;
+	other_sub_memory_ptr += (int)sizeof(struct Sub_Chain_Node *);
+
+	hole_node->type = 0;
+	hole_node->size = PAGE_SIZE * pages_required - (int) size;
+	hole_node->virtual_address = cur_virtual_address;
+	hole_node->physical_address = main_node_memory
+	hole_node->prev_sub_node = process_node;
+	process_node->next_sub_node = hole_node;
+	hole_node->prev_sub_node = process_node;
+	hole_node->next_sub_node = NULL;
+
+
+	*new_address_node = (struct Address *) other_address_memory_ptr;
+	other_address_memory_ptr += sizeof(struct Address *);
+
+	tail_address_node->next_address_node = new_address_node;
+	new_address_node->prev_address_node = tail_address_node;
+	tail_address_node = new_address_node;
+	new_address_node->next_address_node = NULL;
+
+	tail_address_node->virtual_address = cur_virtual_address;
+	tail_address_node->physical_address = main_node_memory;
+	tail_address_node->size = hole_node->size;
+	tail_address_node->associated_node = hole_node;
+
+	cur_virtual_address += process_node->size;
+	start_other_memory_flag = 0;
+
+	return (void *) process_node->virtual_address;
 
 }
 
