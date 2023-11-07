@@ -25,18 +25,18 @@ macro to make the output of all system same and conduct a fair evaluation.
 
 struct Address {
 	int virtual_address;
-	void *physical_address;
+	int *physical_address;
 	int size;
 	struct Sub_Chain_Node *associated_node;
 	struct Address *prev_address_node;
 	struct Address *next_address_node;
-}
+};
 
 struct Sub_Chain_Node {
 	int type; // 1: Process; 0: Hole
 	int size;
 	int virtual_address;
-	void *physical_address;
+	int *physical_address;
 	struct Sub_Chain_Node *prev_sub_node;
     struct Sub_Chain_Node *next_sub_node;
 };
@@ -55,15 +55,14 @@ struct Main_Chain_Node *head_main_node;
 struct Main_Chain_Node *tail_main_node;
 
 int cur_virtual_address;
-int *other_main_memory_ptr;
-int *other_main_memory_end;
+void *other_main_memory_ptr;
+void *other_main_memory_end;
 
-int *other_sub_memory_ptr;
-int *other_sub_memory_end;
+void *other_sub_memory_ptr;
+void *other_sub_memory_end;
 
-int *other_address_memory_ptr;
-int *other_address_memory_end;
-
+void *other_address_memory_ptr;
+void *other_address_memory_end;
 
 /*
 Initializes all the required parameters for the MeMS system. The main parameters to be initialized are:
@@ -128,6 +127,64 @@ Returns: MeMS Virtual address (that is created by MeMS)
 */ 
 void* mems_malloc(size_t size){
 	//Checking if Space is Left in Already Allocated Memory
+	struct Main_Chain_Node *cur_main_node = head_main_node;
+	struct Sub_Chain_Node *cur_sub_node;
+
+	while (cur_main_node != NULL) {
+		cur_sub_node = cur_main_node->head_sub_list;
+
+		while (cur_sub_node != NULL) {
+			if (cur_sub_node->type == 0 && cur_sub_node->size > (int)size) {
+				void *new_other_sub_memory_node = mmap(NULL, 2 * PAGE_SIZE * (((int)sizeof(struct Sub_Chain_Node *)) / PAGE_SIZE + 1), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+				other_sub_memory_ptr = (int*)new_other_sub_memory_node;
+				other_sub_memory_end = other_sub_memory_ptr + 2 * PAGE_SIZE * (((int)sizeof(struct Sub_Chain_Node *)) / PAGE_SIZE + 1);
+
+				struct Sub_Chain_Node *new_hole_node = (struct Sub_Chain_Node *) other_sub_memory_ptr;
+				other_sub_memory_ptr += (int)sizeof(struct Sub_Chain_Node *);
+
+				cur_sub_node->type = 1;
+				new_hole_node->type = 0;
+				new_hole_node->size = cur_sub_node->size - (int) size;
+				int hole_size = cur_sub_node->size - (int) size;
+				cur_sub_node->size = (int) size;
+				int sub_size = (int) size;
+				new_hole_node->virtual_address = cur_sub_node->virtual_address + (int)size;
+				int hole_va = cur_sub_node->virtual_address + (int)size;
+				new_hole_node->physical_address = cur_sub_node->physical_address + (int)size;
+				new_hole_node->next_sub_node = cur_sub_node->next_sub_node;
+				cur_sub_node->next_sub_node = new_hole_node;
+				new_hole_node->prev_sub_node = cur_sub_node;
+				new_hole_node->type = 0;
+
+				if (new_hole_node->next_sub_node) {
+					new_hole_node->next_sub_node->prev_sub_node = new_hole_node;
+				}
+
+				void *new_other_address_memory_node = mmap(NULL, PAGE_SIZE * (((int)sizeof(struct Address *)) / PAGE_SIZE + 1) * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+				other_address_memory_ptr = (int*)new_other_address_memory_node;
+				other_address_memory_end = other_address_memory_ptr + 2 * PAGE_SIZE * (((int)sizeof(struct Address *)) / PAGE_SIZE + 1);
+
+				struct Address *new_address_node = (struct Address *) other_address_memory_ptr;
+				other_address_memory_ptr += sizeof(struct Address *);
+
+				tail_address_node->next_address_node = new_address_node;
+				new_address_node->prev_address_node = tail_address_node;
+				tail_address_node = new_address_node;
+				new_address_node->next_address_node = NULL;
+
+				tail_address_node->virtual_address = new_hole_node->virtual_address;
+				tail_address_node->physical_address = new_hole_node->physical_address;
+				tail_address_node->size = new_hole_node->size;
+				tail_address_node->associated_node = new_hole_node;
+
+				return (void *) cur_sub_node->virtual_address;
+
+			}
+			cur_sub_node = cur_sub_node->next_sub_node;
+		}
+
+		cur_main_node = cur_main_node->next_main_node;
+	}
 
 
 	//No Space is left in Already Allocated Memory
@@ -139,11 +196,9 @@ void* mems_malloc(size_t size){
 	}
 
 
-	if (start_other_memory_flag || (int) (other_main_memory_end - other_main_memory_ptr) < (int)sizeof(struct Main_Chain_Node *)) {
-		void *new_other_main_memory_node = mmap(NULL, PAGE_SIZE * (((int)sizeof(struct Main_Chain_Node *)) / PAGE_SIZE + 1), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		other_main_memory_ptr = new_other_main_memory_node;
-		other_main_memory_end = other_main_memory_ptr + PAGE_SIZE * (((int)sizeof(struct Main_Chain_Node *)) / PAGE_SIZE + 1);
-	}
+	void *new_other_main_memory_node = mmap(NULL, PAGE_SIZE * (((int)sizeof(struct Main_Chain_Node *)) / PAGE_SIZE + 1), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	other_main_memory_ptr = (int*)new_other_main_memory_node;
+	other_main_memory_end = other_main_memory_ptr + PAGE_SIZE * (((int)sizeof(struct Main_Chain_Node *)) / PAGE_SIZE + 1);
 
 	struct Main_Chain_Node *new_main_node = (struct Main_Chain_Node *) other_main_memory_ptr;
 	other_main_memory_ptr += (int)sizeof(struct Main_Chain_Node *);
@@ -164,14 +219,12 @@ void* mems_malloc(size_t size){
 
 	new_main_node->no_of_pages = pages_required;
 
-	void *main_node_memory = mmap(NULL, PAGE_SIZE * pages_required, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	int *main_node_memory = (int *) mmap(NULL, PAGE_SIZE * pages_required, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
 
-	if (start_other_memory_flag || (int) (other_sub_memory_end - other_sub_memory_ptr) < (int)sizeof(struct Sub_Chain_Node *)) {
-		void *new_other_sub_memory_node = mmap(NULL, 2 * PAGE_SIZE * (((int)sizeof(struct Sub_Chain_Node *)) / PAGE_SIZE + 1), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		other_sub_memory_ptr = new_other_sub_memory_node;
-		other_sub_memory_end = other_sub_memory_ptr + 2 * PAGE_SIZE * (((int)sizeof(struct Sub_Chain_Node *)) / PAGE_SIZE + 1);
-	}
+	void *new_other_sub_memory_node = mmap(NULL, PAGE_SIZE * (((int)sizeof(struct Sub_Chain_Node *)) / PAGE_SIZE + 1), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	other_sub_memory_ptr = (int*)new_other_sub_memory_node;
+	other_sub_memory_end = other_sub_memory_ptr + PAGE_SIZE * (((int)sizeof(struct Sub_Chain_Node *)) / PAGE_SIZE + 1);
 
 	struct Sub_Chain_Node *process_node = (struct Sub_Chain_Node *) other_sub_memory_ptr;
 	other_sub_memory_ptr += (int)sizeof(struct Sub_Chain_Node *);
@@ -184,14 +237,13 @@ void* mems_malloc(size_t size){
 	process_node->prev_sub_node = NULL;
 
 
-	if (start_other_memory_flag || (int) (other_address_memory_end - other_address_memory_ptr) < (int)sizeof(struct Address *)) {
-		void *new_other_address_memory_node = mmap(NULL, PAGE_SIZE * (((int)sizeof(struct Address *)) / PAGE_SIZE + 1) * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		other_address_memory_ptr = new_other_address_memory_node;
-		other_address_memory_end = other_address_memory_ptr + 2 * PAGE_SIZE * (((int)sizeof(struct Address *)) / PAGE_SIZE + 1);
-	}
+	void *new_other_address_memory_node = mmap(NULL, PAGE_SIZE * (((int)sizeof(struct Address *)) / PAGE_SIZE + 1), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	other_address_memory_ptr = (int*)new_other_address_memory_node;
+	other_address_memory_end = other_address_memory_ptr + PAGE_SIZE * (((int)sizeof(struct Address *)) / PAGE_SIZE + 1);
+	
 
 	struct Address *new_address_node = (struct Address *) other_address_memory_ptr;
-	other_address_memory_ptr += sizeof(struct Address *);
+	other_address_memory_ptr += (int)sizeof(struct Address *);
 
 	if (start_other_memory_flag) {
 		head_address_node = new_address_node;
@@ -215,20 +267,32 @@ void* mems_malloc(size_t size){
 	main_node_memory += process_node->size;
 
 
+	new_other_sub_memory_node = mmap(NULL, PAGE_SIZE * (((int)sizeof(struct Sub_Chain_Node *)) / PAGE_SIZE + 1), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	other_sub_memory_ptr = (int*)new_other_sub_memory_node;
+	other_sub_memory_end = other_sub_memory_ptr + PAGE_SIZE * (((int)sizeof(struct Sub_Chain_Node *)) / PAGE_SIZE + 1);
+
 	struct Sub_Chain_Node *hole_node = (struct Sub_Chain_Node *) other_sub_memory_ptr;
 	other_sub_memory_ptr += (int)sizeof(struct Sub_Chain_Node *);
 
 	hole_node->type = 0;
 	hole_node->size = PAGE_SIZE * pages_required - (int) size;
 	hole_node->virtual_address = cur_virtual_address;
-	hole_node->physical_address = main_node_memory
+	hole_node->physical_address = main_node_memory;
 	hole_node->prev_sub_node = process_node;
 	process_node->next_sub_node = hole_node;
+	hole_node->type = 0;
+	hole_node->size = PAGE_SIZE * pages_required - (int) size;
+	hole_node->virtual_address = cur_virtual_address;
+	hole_node->physical_address = main_node_memory;
 	hole_node->prev_sub_node = process_node;
 	hole_node->next_sub_node = NULL;
 
+	new_other_address_memory_node = mmap(NULL, PAGE_SIZE * (((int)sizeof(struct Address *)) / PAGE_SIZE + 1), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	other_address_memory_ptr = (int*)new_other_address_memory_node;
+	other_address_memory_end = other_address_memory_ptr + PAGE_SIZE * (((int)sizeof(struct Address *)) / PAGE_SIZE + 1);
 
-	*new_address_node = (struct Address *) other_address_memory_ptr;
+
+	new_address_node = (struct Address *) other_address_memory_ptr;
 	other_address_memory_ptr += sizeof(struct Address *);
 
 	tail_address_node->next_address_node = new_address_node;
@@ -241,7 +305,7 @@ void* mems_malloc(size_t size){
 	tail_address_node->size = hole_node->size;
 	tail_address_node->associated_node = hole_node;
 
-	cur_virtual_address += process_node->size;
+	cur_virtual_address += hole_node->size;
 	start_other_memory_flag = 0;
 
 	return (void *) process_node->virtual_address;
@@ -359,5 +423,51 @@ Parameter: MeMS Virtual address (that is created by MeMS)
 Returns: nothing
 */
 void mems_free(void *v_ptr){
-    
+    struct Main_Chain_Node *cur_main_node = head_main_node;
+    int check_virtual_address = (int) v_ptr;
+    int node_found_flag = 0;
+
+    while (cur_main_node != NULL) {
+    	struct Sub_Chain_Node *cur_sub_node = cur_main_node->head_sub_list;
+
+    	while (cur_sub_node != NULL) {
+    		if (check_virtual_address >= cur_sub_node->virtual_address && check_virtual_address < cur_sub_node->virtual_address + cur_sub_node->size) {
+    			node_found_flag = 1;
+    			if (cur_sub_node->next_sub_node && cur_sub_node->next_sub_node->type == 0) {
+    				cur_sub_node->next_sub_node->size += cur_sub_node->virtual_address + cur_sub_node->size - check_virtual_address;
+    				cur_sub_node->size = check_virtual_address - cur_sub_node->virtual_address;
+    			}
+
+    			else {
+    				if ((int) (other_sub_memory_end - other_sub_memory_ptr) < (int)sizeof(struct Sub_Chain_Node *)) {
+						void *new_other_sub_memory_node = mmap(NULL, PAGE_SIZE * (((int)sizeof(struct Sub_Chain_Node *)) / PAGE_SIZE + 1), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+						other_sub_memory_ptr = (int*)new_other_sub_memory_node;
+						other_sub_memory_end = other_sub_memory_ptr + PAGE_SIZE * (((int)sizeof(struct Sub_Chain_Node *)) / PAGE_SIZE + 1);
+					}
+
+					struct Sub_Chain_Node *new_hole_node = (struct Sub_Chain_Node *) other_sub_memory_ptr;
+					other_sub_memory_ptr += (int)sizeof(struct Sub_Chain_Node *);
+
+					new_hole_node->type = 0;
+					new_hole_node->size = cur_sub_node - check_virtual_address;
+					cur_sub_node->size = check_virtual_address - cur_sub_node->virtual_address;
+					new_hole_node->virtual_address = check_virtual_address;
+					new_hole_node->physical_address = cur_sub_node->physical_address + cur_sub_node->size;
+					new_hole_node->next_sub_node = cur_sub_node->next_sub_node;
+					cur_sub_node->next_sub_node = new_hole_node;
+					new_hole_node->prev_sub_node = cur_sub_node;
+					new_hole_node->next_sub_node->prev_sub_node = new_hole_node;
+
+    			}
+    		}
+
+    		cur_sub_node = cur_sub_node->next_sub_node;
+    	}
+
+    	cur_main_node = cur_main_node->next_main_node;
+    }
+
+    if (!node_found_flag) {
+    	perror("Physical Address not appointed or already free.");
+    }
 }
