@@ -95,8 +95,22 @@ allocated memory using the munmap system call.
 Input Parameter: Nothing
 Returns: Nothing
 */
-void mems_finish(){
-    
+void mems_finish()
+{
+	struct Main_Chain_Node *node = head_main_node;
+	while (node != NULL)
+	{
+		struct Sub_Chain_Node *sub_node = node->head_sub_list;
+		while (sub_node != NULL)
+		{
+			if (munmap(sub_node->physical_address, sub_node->size) == -1)
+			{
+				perror("munmap error");
+			}
+			sub_node = sub_node->next_sub_node;
+		}
+		node = node->next_main_node;
+	}
 }
 
 
@@ -243,8 +257,79 @@ this function print the stats of the MeMS system like
 Parameter: Nothing
 Returns: Nothing but should print the necessary information on STDOUT
 */
-void mems_print_stats(){
 
+void mems_print_stats()
+{
+	struct Main_Chain_Node *node = head_main_node;
+	int first_sub_virtual_address = 0;
+	int last_sub_virtual_address = 0;
+	while (node != NULL)
+	{
+		struct Sub_Chain_Node *sub_node = node->head_sub_list;
+		first_sub_virtual_address = sub_node->virtual_address;
+		while (sub_node != NULL)
+		{
+			last_sub_virtual_address = sub_node->virtual_address + sub_node->size - 1;
+			sub_node = sub_node->next_sub_node;
+		}
+		node = node->next_main_node;
+	}
+	printf("MAIN[%d:%d]-> ", first_sub_virtual_address, last_sub_virtual_address);
+	node = head_main_node;
+	while (node != NULL)
+	{
+		struct Sub_Chain_Node *sub_node = node->head_sub_list;
+		while (sub_node != NULL)
+		{
+			(sub_node->type == 1) ? printf(" -> P") : printf(" -> H");
+			// last_sub_virtual_address = sub_node->virtual_address;
+			printf("[%d:%d] <-> ", sub_node->virtual_address, sub_node->virtual_address + sub_node->size - 1);
+			sub_node = sub_node->next_sub_node;
+		}
+		printf("NULL\n");
+		node = node->next_main_node;
+	}
+	node = head_main_node;
+	int page_count = 0;
+	int space_unused = 0;
+	int main_chain_length = 0;
+	while (node != NULL)
+	{
+		page_count += node->no_of_pages;
+		main_chain_length++;
+		struct Sub_Chain_Node *sub_node = node->head_sub_list;
+		while (sub_node != NULL)
+		{
+			if(sub_node->type == 0)
+			{
+				space_unused += sub_node->size - 1;
+			}
+			sub_node = sub_node->next_sub_node;
+		}
+		node = node->next_main_node;
+	}
+	printf("Pages used : %d\n", page_count);
+	printf("Space unused : %d\n", space_unused);
+	printf("Main Chain Length : %d\n", main_chain_length);
+
+	node = head_main_node;
+	int sub_count = 0;
+	printf("Sub-chain length array : [");
+	while (node != NULL)
+	{
+		page_count += node->no_of_pages;
+		main_chain_length++;
+		struct Sub_Chain_Node *sub_node = node->head_sub_list;
+		while (sub_node != NULL)
+		{
+			sub_node = sub_node->next_sub_node;
+			sub_count++;
+		}
+		printf("%d, ", sub_count);
+		node = node->next_main_node;
+		sub_count = 0;
+	}
+	printf("]\n");
 }
 
 
@@ -253,10 +338,20 @@ Returns the MeMS physical address mapped to ptr ( ptr is MeMS virtual address).
 Parameter: MeMS Virtual address (that is created by MeMS)
 Returns: MeMS physical address mapped to the passed ptr (MeMS virtual address).
 */
-void *mems_get(void*v_ptr){
-    
+void *mems_get(void *v_ptr)
+{
+	struct Address *address = head_address_node;
+	for (int i = (int)address->virtual_address; i < (int)address->virtual_address + (int)address->size; i++)
+	{
+		if (v_ptr >= (void *)address->virtual_address &&
+			v_ptr < (void *)(address->virtual_address + address->size))
+		{
+			size_t offset = (size_t)v_ptr - (size_t)address->virtual_address;
+			return (void *)(address->physical_address + offset);
+		}
+	}
+	return NULL;
 }
-
 
 /*
 this function free up the memory pointed by our virtual_address and add it to the free list
